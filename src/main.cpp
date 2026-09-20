@@ -1,5 +1,4 @@
 // VoxStick for S3AI Game: a desk terminal for local coding agents.
-// Ported from GaryGaryyy/VibeStick (MIT); see ../LICENSE-VibeStick.
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
 #include <SD_MMC.h>

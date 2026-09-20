@@ -1,6 +1,6 @@
 """Cross-platform "is this agent running?" probe.
 
-The upstream bridge shelled out to `ps -axo command=`, which does not exist on
+A POSIX bridge would shell out to `ps -axo command=`, which does not exist on
 Windows. Windows process command lines come from a CIM query instead, and that
 query is slow enough (hundreds of milliseconds) that `/state` polling every two
 seconds must not pay for it on every request, so results are cached.

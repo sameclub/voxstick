@@ -254,7 +254,7 @@ int micSlot() { return activeSlot.load(); }
 uint32_t readErrors() { return errorCount.load(); }
 
 void playAlert(VoxAlertSound sound) {
-    // Matches docs/STATES_AND_SOUNDS.md from the upstream project.
+    // Alert tone table; see README.md.
     static const Tone done[] = {{880, 80, 40}, {1320, 120, 0}};
     static const Tone error[] = {{240, 100, 60}, {240, 100, 60}, {240, 100, 0}};
     static const Tone approval[] = {{600, 100, 60}, {800, 100, 0}};
