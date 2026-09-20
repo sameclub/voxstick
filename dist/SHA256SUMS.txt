@@ -1,1 +1,1 @@
-c0d66948ffaadde743666571d0a88e5c6d8a35d82a8f9b4433ff476a956a2b73  VoxStick-v1.2.bin
+52a22dd9165bc9b66ab474ee67dc5feb9885cda9ae1f514e13fd3ace799ae73c  VoxStick-v1.2.bin

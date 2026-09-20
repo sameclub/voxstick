@@ -13,7 +13,6 @@ namespace VoxAudio {
 // Microphone: allocates the PSRAM take buffer and starts the capture task.
 bool beginMicrophone();
 void endMicrophone();
-bool microphoneOK();
 
 void startRecording();
 void stopRecording();

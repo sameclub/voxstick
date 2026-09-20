@@ -43,9 +43,6 @@ ROUTES: tuple[Route, ...] = (
 
 _TABLE = {(route.method, route.path): route for route in ROUTES}
 
-PROTECTED_PATHS = frozenset(route.path for route in ROUTES if route.protected)
-
-
 def sole(query: dict[str, list[str]], key: str) -> str:
     values = query.get(key) or []
     return values[0] if values else ""

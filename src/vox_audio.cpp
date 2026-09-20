@@ -232,8 +232,6 @@ void endMicrophone() {
     while (!captureStopped.load() && millis() - start < 300) delay(2);
 }
 
-bool microphoneOK() { return micReady.load(); }
-
 void startRecording() {
     taskENTER_CRITICAL(&bufferMux);
     takeBytes.store(0);

@@ -6,7 +6,7 @@ from unittest import mock
 from vox_stick.protocol.state import AgentStatus, ProviderState, default_state
 from vox_stick.codex.quota import QuotaSnapshot
 from vox_stick.providers.base import ProviderObservation
-from vox_stick.server import app, arbiter, quotas
+from vox_stick.server import arbiter, quotas
 from vox_stick.server import settings as bridge_settings
 
 

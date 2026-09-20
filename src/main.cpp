@@ -8,7 +8,6 @@
 #include <esp_ota_ops.h>
 #include <esp_random.h>
 #include <esp_sleep.h>
-#include <esp_timer.h>
 
 #include "vox_audio.h"
 #include "vox_bridge.h"
@@ -231,8 +230,6 @@ void drawRecording() {
     }
 }
 
-// Listing the card costs a directory walk, so it is cached until the page is
-// re-entered rather than repeated every frame.
 void drawDiagRow(int y, const char *label, const String &value, uint16_t color = MID) {
     text(10, y, label, DIM);
     text(64, y, value.substring(0, 29), color);

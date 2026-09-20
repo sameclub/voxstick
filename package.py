@@ -36,4 +36,5 @@ manifest = [{'name': 'VoxStick', 'version': VERSION, 'file': p.name, 'bytes': p.
              'format': 'application-only' if p == app else 'merged-standalone'} for p in files]
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 (out / 'SHA256SUMS.txt').write_text(''.join(f"{item['sha256']}  {item['file']}\n" for item in manifest), encoding='ascii')
+shutil.copyfile(root / 'lib/wifi-portal/LICENSE', out / 'wifi-portal-MIT.txt')
 print(json.dumps(manifest, indent=2))

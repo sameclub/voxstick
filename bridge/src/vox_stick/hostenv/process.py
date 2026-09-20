@@ -32,12 +32,6 @@ def command_lines() -> list[str]:
         return lines
 
 
-def reset_cache() -> None:
-    global _cache
-    with _lock:
-        _cache = (0.0, [])
-
-
 def _posix_command_lines() -> list[str]:
     try:
         result = subprocess.run(
