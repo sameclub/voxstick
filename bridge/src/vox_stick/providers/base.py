@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
 
 from vox_stick.protocol.state import AgentStatus
 
@@ -22,11 +21,3 @@ class ProviderObservation:
     alert_message: str
     alert_event_id: str
     latest_event_timestamp: datetime | None = None
-
-
-class Provider(Protocol):
-    provider_id: str
-    display_name: str
-
-    def observe(self) -> ProviderObservation:
-        ...

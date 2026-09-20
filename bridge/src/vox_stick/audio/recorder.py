@@ -5,7 +5,6 @@ import math
 import os
 import struct
 import subprocess
-import time
 import wave
 import uuid
 from dataclasses import asdict, dataclass
@@ -318,13 +317,6 @@ class RecordingController:
             f"message={self.session.message}",
             flush=True,
         )
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _wav_metrics(audio_file: str) -> AudioMetrics | None:
