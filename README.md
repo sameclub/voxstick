@@ -240,6 +240,10 @@ unpack:
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
 ```
 
+Run PlatformIO from PowerShell or cmd, not Git Bash or MSYS. The platform
+installs its compiler with `idf_tools.py`, which refuses to run under
+MSys/Mingw and leaves the build failing on a missing `xtensa-esp32s3-elf-g++`.
+
 ## Security
 
 - `.env` and `voxstick.ini` hold secrets. Both are gitignored; keep it that way.
