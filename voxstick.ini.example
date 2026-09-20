@@ -1,0 +1,11 @@
+# Copy to /voxstick.ini in the root of the TF card.
+# The bridge host is the computer running `python -m vox_stick`.
+bridge_host=192.168.1.20
+bridge_port=8765
+
+# Must match VOX_STICK_BRIDGE_TOKEN in bridge/.env.
+bridge_token=
+
+# Idle seconds before light sleep. 0 keeps the screen on as a desk monitor;
+# 10 is the S3AI firmware default.
+auto_sleep_seconds=0

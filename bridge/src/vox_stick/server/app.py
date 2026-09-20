@@ -1,0 +1,649 @@
+from __future__ import annotations
+
+import argparse
+import hmac
+import ipaddress
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+from vox_stick import __version__ as BRIDGE_VERSION
+from vox_stick.audio.recorder import RecordingController
+from vox_stick.claude.usage import fetch_usage as fetch_claude_usage
+from vox_stick.claude.usage import to_quota_snapshot as claude_usage_to_quota
+from vox_stick.codex.quota import QuotaSnapshot, load_quota, save_quota
+from vox_stick.config.dotenv import load_env
+from vox_stick.config.paths import CLAUDE_QUOTA_PATH, QUOTA_PATH, RECORDING_PATH, STATE_PATH, ensure_app_support
+from vox_stick.desktop.hud import hide_hud
+from vox_stick.protocol.state import (
+    AlertState,
+    AlertType,
+    VoxStickState,
+    AgentStatus,
+    CodexState,
+    ProviderState,
+    default_state,
+    event_id,
+    now_time_text,
+    state_from_dict,
+)
+from vox_stick.providers.base import ProviderObservation
+from vox_stick.providers.claude import observe_claude
+from vox_stick.providers.codex import observe_codex
+
+MANUAL_STATUS_SECONDS = 60
+BRIDGE_NAME = "voxstick-bridge"
+DEFAULT_MAX_RECORDING_AUDIO_BYTES = 1_800_000
+DEFAULT_CLAUDE_USAGE_INTERVAL_SECONDS = 300
+MIN_CLAUDE_USAGE_INTERVAL_SECONDS = 30
+PLACEHOLDER_BRIDGE_TOKENS = {
+    "change-this-shared-token",
+    "paste-generated-token-here",
+    "changeme",
+    "change-me",
+}
+
+
+class BridgeStateStore:
+    def __init__(self) -> None:
+        ensure_app_support()
+        self._lock = threading.RLock()
+        self._project_root = _resolve_project_root()
+        self._manual_status_until = 0.0
+        self._state = self._load_state()
+        self._last_active_provider = self._state.active_provider or "codex"
+        self._claude_quota = load_quota(CLAUDE_QUOTA_PATH)
+        if not _has_quota(self._claude_quota):
+            self._claude_quota = _claude_quota_from_state(self._state)
+        self._claude_usage_last_attempt = 0.0
+        self._claude_usage_last_success = 0.0
+        quota = load_quota(QUOTA_PATH)
+        self._state.codex.quota_5h_remaining = quota.quota_5h_remaining
+        self._state.codex.quota_7d_remaining = quota.quota_7d_remaining
+        self._state.codex.quota_updated_at = quota.quota_updated_at
+        self._state.codex.quota_stale = quota.quota_stale
+        self.recording = RecordingController(RECORDING_PATH)
+        hide_hud()
+
+    def get_state(self) -> VoxStickState:
+        with self._lock:
+            self._refresh_providers_locked()
+            self._state.time = now_time_text()
+            self._save_state_locked()
+            return self._state
+
+    def update_from_event(self, event: dict[str, Any]) -> VoxStickState:
+        with self._lock:
+            event_name = str(event.get("event") or "")
+            requested_status = event.get("codex_status") or event.get("status")
+            if requested_status:
+                self._set_codex_status(str(requested_status), str(event.get("message") or ""))
+                self._manual_status_until = time.monotonic() + MANUAL_STATUS_SECONDS
+            elif event_name == "button_double":
+                self.refresh_quota_locked()
+            elif event_name == "button_short":
+                self._state.alert = AlertState(event_id="", type=AlertType.NONE, message="")
+            self._save_state_locked()
+            return self._state
+
+    def refresh_quota(self) -> VoxStickState:
+        with self._lock:
+            self.refresh_quota_locked()
+            self._save_state_locked()
+            return self._state
+
+    def refresh_quota_locked(self) -> None:
+        # A refresh button press refreshes both agents, not just the active one.
+        self._refresh_claude_usage_locked(force=True)
+        claude_observation = self._apply_claude_quota(observe_claude(self._project_root))
+        self._state.claude = _provider_state_from_observation(claude_observation)
+
+        codex_observation = observe_codex(self._project_root)
+        self._apply_codex_quota(codex_observation, force_stale=True)
+        self._state.codex = _codex_state_from_observation(codex_observation)
+
+        active = claude_observation if self._state.active_provider == "claude" else codex_observation
+        self._state.provider = _provider_state_from_observation(active)
+
+    def start_recording(self, request: dict[str, Any] | None = None) -> dict[str, Any]:
+        session = self.recording.start(request)
+        with self._lock:
+            self._state.alert = AlertState(
+                event_id="",
+                type=AlertType.NONE,
+                message="",
+            )
+            self._save_state_locked()
+        return {"recording": session.to_jsonable(), "state": self.get_state().to_jsonable()}
+
+    def stop_recording(self, request: dict[str, Any] | None = None) -> dict[str, Any]:
+        session = self.recording.stop(request)
+        return {"recording": session.to_jsonable(), "state": self.get_state().to_jsonable()}
+
+    def upload_recording_audio(
+        self,
+        pcm: bytes,
+        *,
+        session_id: str = "",
+        sample_rate: int = 16000,
+        channels: int = 1,
+        bits_per_sample: int = 16,
+    ) -> dict[str, Any]:
+        session = self.recording.attach_pcm(
+            pcm,
+            session_id=session_id,
+            sample_rate=sample_rate,
+            channels=channels,
+            bits_per_sample=bits_per_sample,
+        )
+        return {"recording": session.to_jsonable(), "state": self.get_state().to_jsonable()}
+
+    def _refresh_providers_locked(self) -> None:
+        codex_observation = observe_codex(self._project_root)
+        claude_observation = observe_claude(self._project_root)
+        self._apply_codex_quota(codex_observation)
+
+        if time.monotonic() < self._manual_status_until:
+            _apply_manual_codex_state(codex_observation, self._state)
+
+        active_provider = _select_active_provider(
+            _configured_provider(),
+            self._last_active_provider,
+            codex_observation,
+            claude_observation,
+        )
+        self._last_active_provider = active_provider
+        self._state.active_provider = active_provider
+
+        self._refresh_claude_usage_locked(force=False)
+        self._apply_claude_quota(claude_observation)
+        active_observation = claude_observation if active_provider == "claude" else codex_observation
+
+        self._state.codex = _codex_state_from_observation(codex_observation)
+        self._state.claude = _provider_state_from_observation(claude_observation)
+        self._state.provider = _provider_state_from_observation(active_observation)
+        self._apply_alert_from_observation(
+            _select_alert_observation(active_observation, codex_observation, claude_observation)
+        )
+
+    def _apply_alert_from_observation(self, observation: ProviderObservation) -> None:
+        try:
+            alert_type = AlertType(observation.alert_type)
+        except ValueError:
+            alert_type = AlertType.NONE
+        if alert_type in {AlertType.DONE, AlertType.APPROVAL, AlertType.ERROR} and observation.alert_event_id:
+            self._state.alert = AlertState(
+                event_id=observation.alert_event_id,
+                type=alert_type,
+                message=observation.alert_message,
+            )
+        else:
+            self._state.alert = AlertState(event_id="", type=AlertType.NONE, message="")
+
+    def _apply_codex_quota(self, observation: ProviderObservation, *, force_stale: bool = False) -> None:
+        if observation.quota_5h_remaining is not None or observation.quota_7d_remaining is not None:
+            refreshed = QuotaSnapshot(
+                quota_5h_remaining=observation.quota_5h_remaining,
+                quota_7d_remaining=observation.quota_7d_remaining,
+                quota_updated_at=observation.quota_updated_at,
+                quota_stale=observation.quota_stale,
+            )
+            save_quota(QUOTA_PATH, refreshed)
+        else:
+            existing = QuotaSnapshot(
+                quota_5h_remaining=self._state.codex.quota_5h_remaining,
+                quota_7d_remaining=self._state.codex.quota_7d_remaining,
+                quota_updated_at=self._state.codex.quota_updated_at,
+                quota_stale=self._state.codex.quota_stale,
+            )
+            if existing.quota_5h_remaining is None and existing.quota_7d_remaining is None:
+                refreshed = existing
+            else:
+                refreshed = _stale_quota(existing)
+            if force_stale:
+                save_quota(QUOTA_PATH, refreshed)
+
+        observation.quota_5h_remaining = refreshed.quota_5h_remaining
+        observation.quota_7d_remaining = refreshed.quota_7d_remaining
+        observation.quota_updated_at = refreshed.quota_updated_at
+        observation.quota_stale = refreshed.quota_stale
+
+    def _refresh_claude_usage_locked(self, *, force: bool) -> None:
+        now = time.monotonic()
+        interval = _claude_usage_interval_seconds()
+        if not force and now - self._claude_usage_last_attempt < interval:
+            return
+        self._claude_usage_last_attempt = now
+
+        usage = fetch_claude_usage()
+        if usage is None:
+            if _has_quota(self._claude_quota):
+                self._claude_quota = _stale_quota(self._claude_quota)
+                save_quota(CLAUDE_QUOTA_PATH, self._claude_quota)
+            else:
+                self._claude_quota = QuotaSnapshot()
+            return
+
+        self._claude_quota = claude_usage_to_quota(usage)
+        save_quota(CLAUDE_QUOTA_PATH, self._claude_quota)
+        self._claude_usage_last_success = now
+
+    def _apply_claude_quota(self, observation: ProviderObservation) -> ProviderObservation:
+        quota = self._current_claude_quota()
+        observation.quota_5h_remaining = quota.quota_5h_remaining
+        observation.quota_7d_remaining = quota.quota_7d_remaining
+        observation.quota_updated_at = quota.quota_updated_at
+        observation.quota_stale = quota.quota_stale
+        return observation
+
+    def _current_claude_quota(self) -> QuotaSnapshot:
+        if (
+            self._claude_quota.quota_5h_remaining is None
+            and self._claude_quota.quota_7d_remaining is None
+        ):
+            return self._claude_quota
+        if self._claude_usage_last_success and time.monotonic() - self._claude_usage_last_success > 30 * 60:
+            return _stale_quota(self._claude_quota)
+        return self._claude_quota
+
+    def _set_codex_status(self, raw_status: str, message: str) -> None:
+        try:
+            status = AgentStatus(raw_status.upper())
+        except ValueError:
+            status = AgentStatus.UNKNOWN
+        self._state.codex.status = status
+        if self._state.active_provider == "codex":
+            self._state.provider.status = status
+        if status == AgentStatus.DONE:
+            self._state.alert = AlertState(event_id("done"), AlertType.DONE, message or "Codex task completed")
+        elif status == AgentStatus.APPROVAL:
+            self._state.alert = AlertState(
+                event_id("approval"),
+                AlertType.APPROVAL,
+                message or "Codex is waiting for approval",
+            )
+        elif status == AgentStatus.ERROR:
+            self._state.alert = AlertState(event_id("error"), AlertType.ERROR, message or "Codex needs attention")
+        else:
+            self._state.alert = AlertState(event_id="", type=AlertType.NONE, message="")
+
+    def _load_state(self) -> VoxStickState:
+        try:
+            return state_from_dict(json.loads(STATE_PATH.read_text(encoding="utf-8")))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            return default_state()
+
+    def _save_state_locked(self) -> None:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_text(json.dumps(self._state.to_jsonable(), indent=2) + "\n", encoding="utf-8")
+
+
+def make_handler(store: BridgeStateStore) -> type[BaseHTTPRequestHandler]:
+    class VoxStickHandler(BaseHTTPRequestHandler):
+        server_version = "VoxStick/0.1"
+
+        def do_GET(self) -> None:
+            if self.path == "/state":
+                self._send_json(_with_bridge_metadata(store.get_state().to_jsonable()))
+            elif self.path == "/health":
+                self._send_json(
+                    {
+                        "ok": True,
+                        "bridge_name": BRIDGE_NAME,
+                        "bridge_version": BRIDGE_VERSION,
+                    }
+                )
+            else:
+                self._send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path in _protected_paths() and not self._is_authorized():
+                self._send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+                return
+
+            if parsed.path == "/event":
+                body = self._read_json_body()
+                self._send_json(store.update_from_event(body).to_jsonable())
+            elif parsed.path == "/quota/refresh":
+                state = store.refresh_quota()
+                self._send_json({"refreshed": True, "state": state.to_jsonable()})
+            elif parsed.path == "/recording/start":
+                body = self._read_json_body()
+                self._send_json(store.start_recording(body))
+            elif parsed.path == "/recording/audio":
+                query = parse_qs(parsed.query)
+                content_length = self._content_length()
+                max_audio_bytes = _max_recording_audio_bytes()
+                if content_length > max_audio_bytes:
+                    self._send_error(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        f"Recording audio exceeds {max_audio_bytes} bytes",
+                    )
+                    return
+                pcm = self._read_raw_body(content_length)
+                self._send_json(
+                    store.upload_recording_audio(
+                        pcm,
+                        session_id=_first(query, "session_id"),
+                        sample_rate=_int_header(self.headers.get("X-Vox-Stick-Sample-Rate"), 16000),
+                        channels=_int_header(self.headers.get("X-Vox-Stick-Channels"), 1),
+                        bits_per_sample=_int_header(self.headers.get("X-Vox-Stick-Bits-Per-Sample"), 16),
+                    )
+                )
+            elif parsed.path == "/recording/stop":
+                body = self._read_json_body()
+                self._send_json(store.stop_recording(body))
+            else:
+                self._send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            firmware_name = self.headers.get("X-Vox-Stick-Firmware-Name", "-")
+            firmware_version = self.headers.get("X-Vox-Stick-Firmware-Version", "-")
+            firmware_transport = self.headers.get("X-Vox-Stick-Firmware-Transport", "-")
+            print(
+                f"{self.address_string()} - {fmt % args} "
+                f"firmware={firmware_name}/{firmware_version} transport={firmware_transport}",
+                flush=True,
+            )
+
+        def _read_json_body(self) -> dict[str, Any]:
+            length = self._content_length()
+            if length == 0:
+                return {}
+            raw = self.rfile.read(length)
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError:
+                return {}
+            return data if isinstance(data, dict) else {}
+
+        def _read_raw_body(self, length: int) -> bytes:
+            if length <= 0:
+                return b""
+            return self.rfile.read(length)
+
+        def _content_length(self) -> int:
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                return 0
+            return max(0, length)
+
+        def _is_authorized(self) -> bool:
+            expected = _bridge_token()
+            if not expected:
+                return True
+            supplied = self.headers.get("X-Vox-Stick-Token", "")
+            return hmac.compare_digest(supplied, expected)
+
+        def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_error(self, status: HTTPStatus, message: str) -> None:
+            self._send_json({"error": message}, status=status)
+
+    return VoxStickHandler
+
+
+def create_server(host: str, port: int) -> ThreadingHTTPServer:
+    """Build the HTTP server without serving it, so an embedding process (the
+    S3AI tool) can run it on its own thread and shut it down again."""
+    _enforce_bind_security(host)
+    store = BridgeStateStore()
+    server = ThreadingHTTPServer((host, port), make_handler(store))
+    server.daemon_threads = True
+    if not _bridge_token():
+        print(
+            "WARNING: VOX_STICK_BRIDGE_TOKEN is not set; POST endpoints are unauthenticated on loopback only.",
+            flush=True,
+        )
+    return server
+
+
+def run_server(host: str, port: int) -> None:
+    server = create_server(host, port)
+    print(f"VoxStick Bridge listening on http://{host}:{port}", flush=True)
+    server.serve_forever()
+
+
+def _protected_paths() -> set[str]:
+    return {
+        "/event",
+        "/quota/refresh",
+        "/recording/start",
+        "/recording/audio",
+        "/recording/stop",
+    }
+
+
+def _bridge_token() -> str:
+    token = os.environ.get("VOX_STICK_BRIDGE_TOKEN", "").strip()
+    if token.lower() in PLACEHOLDER_BRIDGE_TOKENS:
+        return ""
+    return token
+
+
+def _enforce_bind_security(host: str) -> None:
+    if _host_requires_token(host) and not _bridge_token():
+        raise SystemExit(
+            "Refusing to bind VoxStick Bridge outside loopback without "
+            "VOX_STICK_BRIDGE_TOKEN. Set a strong shared token or use --host 127.0.0.1."
+        )
+
+
+def _host_requires_token(host: str) -> bool:
+    normalized = host.strip().strip("[]").lower()
+    if normalized == "localhost":
+        return False
+    if not normalized:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return True
+    return not address.is_loopback
+
+
+def _max_recording_audio_bytes() -> int:
+    raw = os.environ.get("VOX_STICK_MAX_RECORDING_AUDIO_BYTES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_RECORDING_AUDIO_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_RECORDING_AUDIO_BYTES
+    return max(256_000, min(8_000_000, value))
+
+
+def _resolve_project_root() -> Path:
+    configured = os.environ.get("VOX_STICK_PROJECT_ROOT", "").strip()
+    root = Path(configured).expanduser() if configured else Path.cwd()
+    if root.name in {"bridge", "firmware", "app", "scripts"} and (root.parent / "README.md").exists():
+        root = root.parent
+    return root.resolve()
+
+
+def _stale_quota(existing: QuotaSnapshot) -> QuotaSnapshot:
+    return QuotaSnapshot(
+        quota_5h_remaining=existing.quota_5h_remaining,
+        quota_7d_remaining=existing.quota_7d_remaining,
+        quota_updated_at=existing.quota_updated_at,
+        quota_stale=True,
+    )
+
+
+def _has_quota(snapshot: QuotaSnapshot) -> bool:
+    return snapshot.quota_5h_remaining is not None or snapshot.quota_7d_remaining is not None
+
+
+def _claude_quota_from_state(state: VoxStickState) -> QuotaSnapshot:
+    provider = state.provider
+    if provider.id != "claude":
+        return QuotaSnapshot()
+    snapshot = QuotaSnapshot(
+        quota_5h_remaining=provider.quota_5h_remaining,
+        quota_7d_remaining=provider.quota_7d_remaining,
+        quota_updated_at=provider.quota_updated_at,
+        quota_stale=True,
+    )
+    return snapshot if _has_quota(snapshot) else QuotaSnapshot()
+
+
+def _first(query: dict[str, list[str]], key: str) -> str:
+    values = query.get(key) or []
+    return values[0] if values else ""
+
+
+def _with_bridge_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    payload["bridge_name"] = BRIDGE_NAME
+    payload["bridge_version"] = BRIDGE_VERSION
+    return payload
+
+
+def _configured_provider() -> str:
+    value = os.environ.get("VOX_STICK_PROVIDER", "auto").strip().lower()
+    return value if value in {"codex", "claude", "auto"} else "auto"
+
+
+def _select_active_provider(
+    configured: str,
+    last_active: str,
+    codex_observation: ProviderObservation,
+    claude_observation: ProviderObservation,
+) -> str:
+    if configured in {"codex", "claude"}:
+        return configured
+
+    if codex_observation.online and not claude_observation.online:
+        return "codex"
+    if claude_observation.online and not codex_observation.online:
+        return "claude"
+    if codex_observation.online and claude_observation.online:
+        codex_time = codex_observation.latest_event_timestamp
+        claude_time = claude_observation.latest_event_timestamp
+        if codex_time is not None and claude_time is not None:
+            return "claude" if claude_time > codex_time else "codex"
+        if claude_time is not None:
+            return "claude"
+        if codex_time is not None:
+            return "codex"
+        return last_active if last_active in {"codex", "claude"} else "codex"
+
+    return last_active if last_active in {"codex", "claude"} else "codex"
+
+
+def _select_alert_observation(
+    active_observation: ProviderObservation,
+    *observations: ProviderObservation,
+) -> ProviderObservation:
+    if _observation_has_alert(active_observation):
+        return active_observation
+    for observation in observations:
+        if observation is active_observation:
+            continue
+        if _observation_has_alert(observation):
+            return observation
+    return active_observation
+
+
+def _observation_has_alert(observation: ProviderObservation) -> bool:
+    try:
+        alert_type = AlertType(observation.alert_type)
+    except ValueError:
+        return False
+    return alert_type in {AlertType.DONE, AlertType.APPROVAL, AlertType.ERROR} and bool(observation.alert_event_id)
+
+
+def _claude_usage_interval_seconds() -> int:
+    try:
+        value = int(os.environ.get("VOX_STICK_CLAUDE_USAGE_INTERVAL_SECONDS", ""))
+    except ValueError:
+        value = DEFAULT_CLAUDE_USAGE_INTERVAL_SECONDS
+    if value <= 0:
+        value = DEFAULT_CLAUDE_USAGE_INTERVAL_SECONDS
+    return max(MIN_CLAUDE_USAGE_INTERVAL_SECONDS, value)
+
+
+def _codex_state_from_observation(observation: ProviderObservation) -> CodexState:
+    return CodexState(
+        status=observation.status,
+        project=observation.project,
+        quota_5h_remaining=observation.quota_5h_remaining,
+        quota_7d_remaining=observation.quota_7d_remaining,
+        quota_updated_at=observation.quota_updated_at,
+        quota_stale=observation.quota_stale,
+    )
+
+
+def _provider_state_from_observation(observation: ProviderObservation) -> ProviderState:
+    return ProviderState(
+        id=observation.provider_id,
+        display_name=observation.display_name,
+        implemented=True,
+        status=observation.status,
+        project=observation.project,
+        quota_5h_remaining=observation.quota_5h_remaining,
+        quota_7d_remaining=observation.quota_7d_remaining,
+        quota_updated_at=observation.quota_updated_at,
+        quota_stale=observation.quota_stale,
+    )
+
+
+def _apply_manual_codex_state(observation: ProviderObservation, state: VoxStickState) -> None:
+    observation.status = state.codex.status
+    observation.alert_type = state.alert.type.value
+    observation.alert_message = state.alert.message
+    observation.alert_event_id = state.alert.event_id
+
+
+def _int_header(raw: str | None, default: int) -> int:
+    try:
+        value = int(raw or "")
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _start_hud() -> "subprocess.Popen[bytes] | None":
+    """Run the HUD in its own process: Tk must own a process main thread."""
+    try:
+        return subprocess.Popen([sys.executable, "-m", "vox_stick.desktop.hud_window"])
+    except OSError as exc:
+        print(f"HUD failed to start: {exc}", flush=True)
+        return None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run VoxStick Bridge.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--hud", action="store_true", help="also run the desktop HUD window")
+    parser.add_argument("--port", type=int, default=8765)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    env_file = load_env()
+    if env_file is not None:
+        print(f"Loaded configuration from {env_file}", flush=True)
+    args = build_parser().parse_args(argv)
+    hud_process = _start_hud() if args.hud else None
+    try:
+        run_server(args.host, args.port)
+    finally:
+        if hud_process is not None and hud_process.poll() is None:
+            hud_process.terminate()
