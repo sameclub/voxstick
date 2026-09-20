@@ -1,6 +1,7 @@
 """The device shows two columns, so /state must carry both agents every poll."""
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from unittest import mock
 from vox_stick.codex.quota import QuotaSnapshot
 from vox_stick.protocol.state import AgentStatus, VoxStickState, default_state, state_from_dict
 from vox_stick.providers.base import ProviderObservation
-from vox_stick.server import app
+from vox_stick.server import app, quotas
 
 
 def observation(
@@ -44,8 +45,8 @@ class StoreWithBothProvidersTests(unittest.TestCase):
         root = Path(self.tmp.name)
         patches = [
             mock.patch.object(app, "STATE_PATH", root / "state.json"),
-            mock.patch.object(app, "QUOTA_PATH", root / "quota.json"),
-            mock.patch.object(app, "CLAUDE_QUOTA_PATH", root / "claude-quota.json"),
+            mock.patch.object(quotas, "QUOTA_PATH", root / "quota.json"),
+            mock.patch.object(quotas, "CLAUDE_QUOTA_PATH", root / "claude-quota.json"),
             mock.patch.object(app, "RECORDING_PATH", root / "recording.json"),
             mock.patch.object(app, "ensure_app_support", lambda: root),
             mock.patch.object(app, "hide_hud", lambda *a, **k: None),
@@ -64,11 +65,11 @@ class StoreWithBothProvidersTests(unittest.TestCase):
     ) -> VoxStickState:
         with mock.patch.object(app, "observe_codex", return_value=codex), mock.patch.object(
             app, "observe_claude", return_value=claude
-        ), mock.patch.object(app, "_configured_provider", return_value=provider):
-            store = app.BridgeStateStore()
+        ), mock.patch.dict(os.environ, {"VOX_STICK_PROVIDER": provider}):
+            store = app.BridgeSession()
             if claude_quota is not None:
-                store._claude_quota = claude_quota
-                store._claude_usage_last_success = app.time.monotonic()
+                store._quotas._claude = claude_quota
+                store._quotas._claude_poll.succeeded = app.time.monotonic()
             return store.get_state()
 
     def test_state_carries_claude_even_when_codex_is_active(self) -> None:
@@ -114,10 +115,10 @@ class StoreWithBothProvidersTests(unittest.TestCase):
         claude = observation("claude")
         with mock.patch.object(app, "observe_codex", return_value=codex), mock.patch.object(
             app, "observe_claude", return_value=claude
-        ), mock.patch.object(app, "_configured_provider", return_value="codex"):
-            store = app.BridgeStateStore()
-            store._claude_quota = QuotaSnapshot(45, 63, "08:55", False)
-            store._claude_usage_last_success = app.time.monotonic()
+        ), mock.patch.dict(os.environ, {"VOX_STICK_PROVIDER": "codex"}):
+            store = app.BridgeSession()
+            store._quotas._claude = QuotaSnapshot(45, 63, "08:55", False)
+            store._quotas._claude_poll.succeeded = app.time.monotonic()
             state = store.refresh_quota()
 
         self.assertEqual(state.codex.quota_5h_remaining, 11)
