@@ -1,0 +1,1 @@
+"""vox_stick.protocol"""

@@ -1,0 +1,17 @@
+.pio/
+__pycache__/
+*.py[cod]
+
+# Local-only PlatformIO overrides and notes
+platformio.local.ini
+README.local.md
+
+# Build output: ship the firmware image and its checksums, nothing else
+dist/*
+!dist/*.bin
+!dist/manifest.json
+!dist/SHA256SUMS.txt
+
+# Secrets: real credentials, never commit
+bridge/.env
+voxstick.ini
