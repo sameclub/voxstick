@@ -21,7 +21,3 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---
-
-This project began as a port of VibeStick (https://github.com/GaryGaryyy/VibeStick)
-and retains its bridge module layout and HTTP protocol. That work is used under
-the MIT License; its notice is reproduced in LICENSE-VibeStick.
