@@ -10,10 +10,8 @@ handheld. It shows whether Codex or Claude Code is working, how much of your
 and a bridge on your computer transcribes it and drops the text into the
 matching chat box.
 
-Ported from [GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick)
-(MIT, see [LICENSE-VibeStick](LICENSE-VibeStick)). The original targets M5Stack
-StickS3 and macOS; this one targets the S3AI Game (240x240 display, MSM261S
-microphone, MAX98357A amplifier) on Windows, macOS and Linux.
+The device is a 240x240 display, an MSM261S microphone and a MAX98357A
+amplifier; the bridge runs on Windows, macOS and Linux.
 
 **The device never talks to a cloud service.** It only speaks HTTP to the
 bridge on your LAN. Speech recognition, quota reads and paste injection all
@@ -149,8 +147,7 @@ Config errors, HTTP codes, microphone and memory live on the two SELECT pages.
 
 ## Alert sounds
 
-Only agent state changes make a sound; recording never does. Matches the
-upstream `STATES_AND_SOUNDS.md`:
+Only agent state changes make a sound; recording never does.
 
 | State | Sound |
 |---|---|
@@ -201,8 +198,7 @@ file was written in the last 10 minutes, because on Windows both CLIs run as
 
 The device polls `GET /state` every 2 s; everything else is POST. `/event`,
 `/quota/refresh`, `/recording/start`, `/recording/audio` and `/recording/stop`
-require the `X-Vox-Stick-Token` header. The protocol is compatible with upstream
-v0.1.2, except `audio_source` is now `device_pcm`.
+require the `X-Vox-Stick-Token` header. Protocol version 0.1.2.
 
 ## Troubleshooting
 
@@ -268,6 +264,4 @@ hardware.
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Ported from
-[GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick), MIT, see
-[LICENSE-VibeStick](LICENSE-VibeStick).
+MIT, see [LICENSE](LICENSE).

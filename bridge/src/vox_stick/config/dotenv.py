@@ -1,6 +1,6 @@
 """Minimal .env loader.
 
-Upstream sourced the file from a shell script (`set -a; . .env`). PowerShell has
+A shell would source this file directly (`set -a; . .env`). PowerShell has
 no equivalent, so the bridge loads it itself and stays launchable the same way
 on every platform. Values already present in the environment win.
 """

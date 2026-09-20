@@ -85,7 +85,7 @@ class RecordingController:
             message="Recording session started",
             target_provider=target_provider,
         )
-        # The device is the only microphone. Upstream had a Mac AVFoundation
+        # The device is the only microphone. There is no host-side AVFoundation
         # fallback; the recording command hooks cover that role portably.
         self.session.audio_source = "device_pcm"
         self.session.message = f"Waiting for audio upload from {requested_source or 'device'}"

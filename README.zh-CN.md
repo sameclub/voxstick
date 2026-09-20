@@ -8,9 +8,8 @@
 当前在不在干活、5H / 7D 额度还剩多少，状态变化时响提示音。按住 AI 键说话，电脑上的
 bridge 转写后自动填进对应的对话输入框。
 
-移植自 [GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick)（MIT，见
-[LICENSE-VibeStick](LICENSE-VibeStick)）。原项目面向 M5Stack StickS3 + macOS，本项目
-面向 S3AI Game（240x240 屏、MSM261S 麦克风、MAX98357A 功放）+ Windows / macOS / Linux。
+设备侧是 240x240 屏、MSM261S 麦克风和 MAX98357A 功放；bridge 支持
+Windows / macOS / Linux。
 
 **设备不直接访问任何云服务。** 它只和局域网里的 bridge 说 HTTP；语音识别、额度读取、
 粘贴注入都在电脑上完成。
@@ -137,7 +136,7 @@ provider 名字右边的圆点表示这一栏是 bridge 当前选中的 active p
 
 ## 提示音
 
-只有 agent 状态变化才响，录音相关状态一律不响。与上游 `STATES_AND_SOUNDS.md` 一致：
+只有 agent 状态变化才响，录音相关状态一律不响。
 
 | 状态 | 声音 |
 |---|---|
@@ -179,8 +178,7 @@ provider 名字右边的圆点表示这一栏是 bridge 当前选中的 active p
 ## HTTP 接口
 
 设备每 2 秒 `GET /state`，其余都是 POST。`/event`、`/quota/refresh`、`/recording/start`、
-`/recording/audio`、`/recording/stop` 需要 `X-Vox-Stick-Token` 头。协议与上游 v0.1.2
-兼容，只是 `audio_source` 改成了 `device_pcm`。
+`/recording/audio`、`/recording/stop` 需要 `X-Vox-Stick-Token` 头。协议版本 0.1.2。
 
 ## 排错
 
@@ -241,6 +239,4 @@ New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。移植自
-[GaryGaryyy/VibeStick](https://github.com/GaryGaryyy/VibeStick)（MIT），见
-[LICENSE-VibeStick](LICENSE-VibeStick)。
+MIT，见 [LICENSE](LICENSE)。
