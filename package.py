@@ -8,7 +8,7 @@ import shutil
 parser = argparse.ArgumentParser()
 parser.add_argument('--factory', action='store_true', help='also export the standalone merged firmware')
 args = parser.parse_args()
-VERSION = '1.2'
+VERSION = '1.3'
 root = Path(__file__).resolve().parent
 build = root / '.pio/build/s3ai-voxstick'
 out = root / 'dist'

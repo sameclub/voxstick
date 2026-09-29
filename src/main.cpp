@@ -12,7 +12,7 @@
 #include "vox_audio.h"
 #include "vox_bridge.h"
 
-#define VOXSTICK_VERSION "1.2"
+#define VOXSTICK_VERSION "1.3"
 
 constexpr uint16_t BG = 0x0000, WHITE = 0xFFFF, MID = 0x8410, DIM = 0x4208;
 constexpr uint16_t GREEN = 0x07E6, RED = 0xF986, YELLOW = 0xFEA0, CYAN = 0x07FF;

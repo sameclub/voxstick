@@ -95,12 +95,12 @@ pio run -e s3ai-voxstick
 python package.py
 ```
 
-Install `dist/VoxStick-v1.2.bin` with the Launcher SD file browser, or write it
+Install `dist/VoxStick-v1.3.bin` with the Launcher SD file browser, or write it
 straight to the app partition:
 
 ```bash
 python -m esptool --chip esp32s3 --port COM3 --baud 921600 \
-  write_flash 0x10000 dist/VoxStick-v1.2.bin
+  write_flash 0x10000 dist/VoxStick-v1.3.bin
 ```
 
 ## 5. Provisioning

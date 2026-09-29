@@ -90,11 +90,11 @@ pio run -e s3ai-voxstick
 python package.py
 ```
 
-用 Launcher 的 TF 卡文件浏览器安装 `dist/VoxStick-v1.2.bin`，或直接刷 app 分区：
+用 Launcher 的 TF 卡文件浏览器安装 `dist/VoxStick-v1.3.bin`，或直接刷 app 分区：
 
 ```bash
 python -m esptool --chip esp32s3 --port COM3 --baud 921600 \
-  write_flash 0x10000 dist/VoxStick-v1.2.bin
+  write_flash 0x10000 dist/VoxStick-v1.3.bin
 ```
 
 ## 五、配网

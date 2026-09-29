@@ -1,10 +1,10 @@
 [
   {
     "name": "VoxStick",
-    "version": "1.2",
-    "file": "VoxStick-v1.2.bin",
-    "bytes": 1176112,
-    "sha256": "52a22dd9165bc9b66ab474ee67dc5feb9885cda9ae1f514e13fd3ace799ae73c",
+    "version": "1.3",
+    "file": "VoxStick-v1.3.bin",
+    "bytes": 1176224,
+    "sha256": "471f664ea446e49a4d3dbe764feb736eea7db83b9dde612dbd9036339637d3bb",
     "format": "application-only"
   }
 ]
