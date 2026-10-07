@@ -5,7 +5,7 @@
 #include <WiFi.h>
 
 #define FIRMWARE_NAME "voxstick-s3ai"
-#define FIRMWARE_VERSION "1.3"
+#define FIRMWARE_VERSION "1.4"
 
 namespace {
 

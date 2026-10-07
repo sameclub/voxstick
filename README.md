@@ -95,12 +95,12 @@ pio run -e s3ai-voxstick
 python package.py
 ```
 
-Install `dist/VoxStick-v1.3.bin` with the Launcher SD file browser, or write it
+Install `dist/VoxStick-v1.4.bin` with the Launcher SD file browser, or write it
 straight to the app partition:
 
 ```bash
 python -m esptool --chip esp32s3 --port COM3 --baud 921600 \
-  write_flash 0x10000 dist/VoxStick-v1.3.bin
+  write_flash 0x10000 dist/VoxStick-v1.4.bin
 ```
 
 ## 5. Provisioning
@@ -121,7 +121,7 @@ it restores the previous network and reopens the hotspot under the same name, so
 the phone rejoins and shows the error. A failed attempt never destroys working
 credentials.
 
-If a saved network stays unreachable for 60 s, the device opens provisioning by
+If a saved network stays unreachable for at least 60 s (and one full saved-network cycle), the device opens provisioning by
 itself on the next boot.
 
 ## Keys
@@ -265,3 +265,5 @@ hardware.
 ## Licence
 
 MIT, see [LICENSE](LICENSE).
+
+Wi-Fi remembers up to 8 verified networks per app. Adding another network keeps previous entries; updating an SSID replaces its password. While offline, the firmware tries each saved network for 10 seconds in order, starting with the most recently added/updated. At capacity it replaces the oldest entry. Existing single-network credentials remain usable after upgrading. Automatic sleep waits for the first complete connection cycle.
